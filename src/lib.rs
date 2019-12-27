@@ -92,8 +92,7 @@ impl Ball {
         Ball {
             verticies,
             position: Vector2::zeros(),
-            velocity: Vector2::new((random() as f32 - 0.5) * 2.0, random() as f32 - 0.5)
-                .normalize(),
+            velocity: Vector2::new((random() as f32 - 0.5) * 2.0, 0.0).normalize(),
             color,
             buffer,
             vert_pos_att,
@@ -103,8 +102,7 @@ impl Ball {
 
     pub fn reset(&mut self) {
         self.position = Vector2::new(0.0, 0.0);
-        self.velocity =
-            Vector2::new((random() as f32 - 0.5) * 2.0, random() as f32 - 0.5).normalize();
+        self.velocity = Vector2::new((random() as f32 - 0.5) * 2.0, 0.0).normalize();
     }
 }
 
@@ -146,14 +144,12 @@ pub fn init(vertex_shader: String, fragment_shader: String) {
         } else if event.key_code() == 83 {
             *user_movement_down.borrow_mut() = Movement::Down;
         }
-        console_log!("{:?}", *user_movement_down.borrow());
     }) as Box<dyn FnMut(_)>);
 
     document().add_event_listener_with_callback("keydown", handle_keydown.as_ref().unchecked_ref());
     handle_keydown.forget();
     let handle_keyup = Closure::wrap(Box::new(move |event: KeyboardEvent| {
         let mut mut_user_movement = user_movement_up.borrow_mut();
-        console_log!("UP");
         match (event.key_code(), *mut_user_movement) {
             (87, Movement::Up) => *mut_user_movement = Movement::None,
             (83, Movement::Down) => *mut_user_movement = Movement::None,
@@ -166,9 +162,6 @@ pub fn init(vertex_shader: String, fragment_shader: String) {
     let handle_visibility = Closure::wrap(Box::new(move || {
         if document().visibility_state() == VisibilityState::Visible {
             *last_time_enter.borrow_mut() = window().performance().unwrap().now();
-            console_log!("You're back: {}", *last_time_enter.borrow());
-        } else {
-            console_log!("Leaving:{}", *last_time_enter.borrow());
         }
     }) as Box<dyn FnMut()>);
     document().set_onvisibilitychange(Some(handle_visibility.as_ref().unchecked_ref()));
@@ -252,7 +245,6 @@ pub fn init(vertex_shader: String, fragment_shader: String) {
 }
 
 fn move_user(player: &mut Paddle, movement: Movement) {
-    console_log!("::{:?}", movement);
     match movement {
         Movement::Up => {
             if player.position.y < 0.47 {
