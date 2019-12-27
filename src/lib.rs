@@ -17,6 +17,7 @@ mod extern_js;
 struct Paddle {
     verticies: [f32; 12],
     position: Vector2<f32>,
+    velocity: Vector2<f32>,
     color: [f32; 4],
     buffer: WebGlBuffer,
     vert_pos_att: u32,
@@ -46,6 +47,7 @@ impl Paddle {
         Paddle {
             verticies,
             position: Vector2::new(x, y),
+            velocity: Vector2::zeros(),
             color,
             buffer: buffer,
             vert_pos_att,
@@ -61,6 +63,7 @@ struct Ball {
     color: [f32; 4],
     buffer: WebGlBuffer,
     vert_pos_att: u32,
+    radius: f32,
 }
 
 impl Ball {
@@ -88,23 +91,20 @@ impl Ball {
         }
         Ball {
             verticies,
-            position: Vector2::new(0.0, 0.0),
-            velocity: Vector2::new(
-                (random() as f32 - 0.5) / 30.0,
-                (random() as f32 - 0.5) / 100.0,
-            ),
+            position: Vector2::zeros(),
+            velocity: Vector2::new((random() as f32 - 0.5) * 2.0, random() as f32 - 0.5)
+                .normalize(),
             color,
             buffer,
             vert_pos_att,
+            radius,
         }
     }
 
     pub fn reset(&mut self) {
         self.position = Vector2::new(0.0, 0.0);
-        self.velocity = Vector2::new(
-            (random() as f32 - 0.5) / 30.0,
-            (random() as f32 - 0.5) / 100.0,
-        );
+        self.velocity =
+            Vector2::new((random() as f32 - 0.5) * 2.0, random() as f32 - 0.5).normalize();
     }
 }
 
@@ -126,10 +126,24 @@ pub fn init(vertex_shader: String, fragment_shader: String) {
 
     let f = Rc::new(RefCell::new(None));
     let g = f.clone();
+    let last_time = Rc::new(RefCell::new(window().performance().unwrap().now()));
+    let last_time_enter = last_time.clone();
+    let handle_enter = Closure::wrap(Box::new(move || {
+        if document().visibility_state() == VisibilityState::Visible {
+            *last_time_enter.borrow_mut() = window().performance().unwrap().now();
+            console_log!("You're back: {}", *last_time_enter.borrow());
+        } else {
+            console_log!("Leaving:{}", *last_time_enter.borrow());
+        }
+    }) as Box<FnMut()>);
+    document().set_onvisibilitychange(Some(handle_enter.as_ref().unchecked_ref()));
+    handle_enter.forget();
     *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
+        let cur_time = window().performance().unwrap().now();
+        let time_delta = (cur_time - *last_time.borrow()) / 1000.0;
+        *last_time.borrow_mut() = cur_time;
         gl.clear_color(0.0, 0.0, 0.0, 1.0);
         gl.clear(WebGlRenderingContext::COLOR_BUFFER_BIT);
-        let window = window();
         let document = document();
         let canvas: HtmlCanvasElement = document
             .get_element_by_id("canvas")
@@ -158,8 +172,8 @@ pub fn init(vertex_shader: String, fragment_shader: String) {
         mv_mat.append_translation_mut(&Vector3::new(ball.position.x, ball.position.y, 0.0));
         gl.uniform_matrix4fv_with_f32_array(Some(&mv_mat_loc), false, mv_mat.as_slice());
         gl.draw_arrays(WebGlRenderingContext::TRIANGLE_FAN, 0, 16);
-        collision(&mut ball, &mut player1, &mut player2);
-        ball.position += ball.velocity;
+        collision(&mut ball, &player1, &player2, time_delta as f32);
+        ball.position += ball.velocity * time_delta as f32;
         gl.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&player1.buffer));
         gl.vertex_attrib_pointer_with_i32(
             player1.vert_pos_att,
@@ -171,7 +185,7 @@ pub fn init(vertex_shader: String, fragment_shader: String) {
         );
         gl.uniform4fv_with_f32_array(Some(&color_uni), &player1.color);
         let mut mv_mat = Matrix4::<f32>::identity();
-        mv_mat.append_translation_mut(&Vector3::new(player1.position.x, player2.position.y, 0.0));
+        mv_mat.append_translation_mut(&Vector3::new(player1.position.x, player1.position.y, 0.0));
         gl.uniform_matrix4fv_with_f32_array(Some(&mv_mat_loc), false, mv_mat.as_slice());
         gl.draw_arrays(WebGlRenderingContext::TRIANGLES, 0, 6);
         gl.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&player2.buffer));
@@ -189,21 +203,58 @@ pub fn init(vertex_shader: String, fragment_shader: String) {
         gl.uniform_matrix4fv_with_f32_array(Some(&mv_mat_loc), false, mv_mat.as_slice());
         gl.draw_arrays(WebGlRenderingContext::TRIANGLES, 0, 6);
         request_animation_frame(f.borrow().as_ref().unwrap());
+        player2.position += player2.velocity * time_delta as f32;
+        move_ai(&ball, &mut player2);
     }) as Box<FnMut()>));
-    let window = window();
+
     request_animation_frame(g.borrow().as_ref().unwrap());
 }
 
-fn collision(ball: &mut Ball, player1: &mut Paddle, player2: &mut Paddle) {
-    if ball.position.y < -0.552 || ball.position.y > 0.552 {
+fn move_ai(ball: &Ball, player: &mut Paddle) {
+    if ball.position.y < player.position.y {
+        player.velocity.y = -0.5;
+    } else if ball.position.y > player.position.y {
+        player.velocity.y = 0.5;
+    }
+}
+
+fn collision(ball: &mut Ball, player1: &Paddle, player2: &Paddle, time_delta: f32) {
+    let updated_pos = ball.position + ball.velocity * time_delta;
+    if updated_pos.y < -0.552 || updated_pos.y > 0.552 {
         ball.velocity.y = -ball.velocity.y;
     }
 
-    if ball.position.x > 1.0 || ball.position.x < -1.0 {
+    if circle_intersect_line(
+        updated_pos,
+        ball.radius,
+        player2.position + Vector2::new(-0.025, 0.1),
+        player2.position + Vector2::new(-0.025, -0.1),
+    ) {
+        ball.velocity.x = -ball.velocity.x;
+    }
+
+    if circle_intersect_line(
+        updated_pos,
+        ball.radius,
+        player1.position + Vector2::new(0.025, 0.1),
+        player1.position + Vector2::new(0.025, -0.1),
+    ) {
+        ball.velocity.x = -ball.velocity.x;
+    }
+
+    if updated_pos.x > 1.0 || updated_pos.x < -1.0 {
         ball.reset();
     }
 }
 
+fn circle_intersect_line(p: Vector2<f32>, radius: f32, a: Vector2<f32>, b: Vector2<f32>) -> bool {
+    let line = a - b;
+    let pa = p - a;
+    let parallel = line.normalize().dot(&pa) * line.normalize();
+    let perp = pa - parallel;
+    console_log!("{}", perp.norm());
+    perp.norm() * dir <= radius && p.y - radius <= a.y && p.y + radius >= b.y
+}
 fn window() -> web_sys::Window {
     web_sys::window().expect("no global `window` exists")
 }
@@ -220,10 +271,16 @@ fn document() -> web_sys::Document {
         .expect("should have a document on window")
 }
 
+fn canvas() -> HtmlCanvasElement {
+    document()
+        .get_element_by_id("canvas")
+        .unwrap()
+        .dyn_into()
+        .expect("should have canvas")
+}
+
 fn create_context() -> Result<WebGlRenderingContext, JsValue> {
-    let document = document();
-    let canvas: HtmlCanvasElement = document.get_element_by_id("canvas").unwrap().dyn_into()?;
-    let gl = canvas.get_context("webgl")?.unwrap().dyn_into()?;
+    let gl = canvas().get_context("webgl")?.unwrap().dyn_into()?;
 
     Ok(gl)
 }

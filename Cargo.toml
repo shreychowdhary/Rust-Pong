@@ -36,6 +36,9 @@ features = [
   'Response',
   'Window',
   'WebGlUniformLocation',
+  'Performance',
+  'EventTarget',
+  'VisibilityState',
 ]
 
 [dev-dependencies]
