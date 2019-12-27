@@ -108,6 +108,13 @@ impl Ball {
     }
 }
 
+#[derive(Debug, Copy, Clone)]
+enum Movement {
+    Up,
+    Down,
+    None,
+}
+
 #[wasm_bindgen]
 pub fn init(vertex_shader: String, fragment_shader: String) {
     utils::set_panic_hook();
@@ -128,16 +135,45 @@ pub fn init(vertex_shader: String, fragment_shader: String) {
     let g = f.clone();
     let last_time = Rc::new(RefCell::new(window().performance().unwrap().now()));
     let last_time_enter = last_time.clone();
-    let handle_enter = Closure::wrap(Box::new(move || {
+
+    let user_movement = Rc::new(RefCell::new(Movement::None));
+    let user_movement_down = user_movement.clone();
+    let user_movement_up = user_movement.clone();
+
+    let handle_keydown = Closure::wrap(Box::new(move |event: KeyboardEvent| {
+        if event.key_code() == 87 {
+            *user_movement_down.borrow_mut() = Movement::Up;
+        } else if event.key_code() == 83 {
+            *user_movement_down.borrow_mut() = Movement::Down;
+        }
+        console_log!("{:?}", *user_movement_down.borrow());
+    }) as Box<dyn FnMut(_)>);
+
+    document().add_event_listener_with_callback("keydown", handle_keydown.as_ref().unchecked_ref());
+    handle_keydown.forget();
+    let handle_keyup = Closure::wrap(Box::new(move |event: KeyboardEvent| {
+        let mut mut_user_movement = user_movement_up.borrow_mut();
+        console_log!("UP");
+        match (event.key_code(), *mut_user_movement) {
+            (87, Movement::Up) => *mut_user_movement = Movement::None,
+            (83, Movement::Down) => *mut_user_movement = Movement::None,
+            (_, _) => (),
+        };
+    }) as Box<dyn FnMut(_)>);
+    document().add_event_listener_with_callback("keyup", handle_keyup.as_ref().unchecked_ref());
+    handle_keyup.forget();
+
+    let handle_visibility = Closure::wrap(Box::new(move || {
         if document().visibility_state() == VisibilityState::Visible {
             *last_time_enter.borrow_mut() = window().performance().unwrap().now();
             console_log!("You're back: {}", *last_time_enter.borrow());
         } else {
             console_log!("Leaving:{}", *last_time_enter.borrow());
         }
-    }) as Box<FnMut()>);
-    document().set_onvisibilitychange(Some(handle_enter.as_ref().unchecked_ref()));
-    handle_enter.forget();
+    }) as Box<dyn FnMut()>);
+    document().set_onvisibilitychange(Some(handle_visibility.as_ref().unchecked_ref()));
+    handle_visibility.forget();
+
     *g.borrow_mut() = Some(Closure::wrap(Box::new(move || {
         let cur_time = window().performance().unwrap().now();
         let time_delta = (cur_time - *last_time.borrow()) / 1000.0;
@@ -167,6 +203,7 @@ pub fn init(vertex_shader: String, fragment_shader: String) {
             0,
             0,
         );
+
         gl.uniform4fv_with_f32_array(Some(&color_uni), &ball.color);
         let mut mv_mat = Matrix4::<f32>::identity();
         mv_mat.append_translation_mut(&Vector3::new(ball.position.x, ball.position.y, 0.0));
@@ -174,6 +211,7 @@ pub fn init(vertex_shader: String, fragment_shader: String) {
         gl.draw_arrays(WebGlRenderingContext::TRIANGLE_FAN, 0, 16);
         collision(&mut ball, &player1, &player2, time_delta as f32);
         ball.position += ball.velocity * time_delta as f32;
+
         gl.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&player1.buffer));
         gl.vertex_attrib_pointer_with_i32(
             player1.vert_pos_att,
@@ -188,6 +226,9 @@ pub fn init(vertex_shader: String, fragment_shader: String) {
         mv_mat.append_translation_mut(&Vector3::new(player1.position.x, player1.position.y, 0.0));
         gl.uniform_matrix4fv_with_f32_array(Some(&mv_mat_loc), false, mv_mat.as_slice());
         gl.draw_arrays(WebGlRenderingContext::TRIANGLES, 0, 6);
+        player1.position += player1.velocity * time_delta as f32;
+        move_user(&mut player1, *user_movement.borrow());
+
         gl.bind_buffer(WebGlRenderingContext::ARRAY_BUFFER, Some(&player2.buffer));
         gl.vertex_attrib_pointer_with_i32(
             player2.vert_pos_att,
@@ -205,15 +246,40 @@ pub fn init(vertex_shader: String, fragment_shader: String) {
         request_animation_frame(f.borrow().as_ref().unwrap());
         player2.position += player2.velocity * time_delta as f32;
         move_ai(&ball, &mut player2);
-    }) as Box<FnMut()>));
+    }) as Box<dyn FnMut()>));
 
     request_animation_frame(g.borrow().as_ref().unwrap());
 }
 
+fn move_user(player: &mut Paddle, movement: Movement) {
+    console_log!("::{:?}", movement);
+    match movement {
+        Movement::Up => {
+            if player.position.y < 0.47 {
+                player.velocity.y = 0.5;
+            } else {
+                player.velocity.y = 0.0;
+            }
+        }
+        Movement::Down => {
+            if player.position.y > -0.47 {
+                player.velocity.y = -0.5;
+            } else {
+                player.velocity.y = 0.0;
+            }
+        }
+        Movement::None => {
+            player.velocity.y = 0.0;
+        }
+    }
+}
+
 fn move_ai(ball: &Ball, player: &mut Paddle) {
-    if ball.position.y < player.position.y {
+    if (ball.position.y - player.position.y).abs() < 0.05 {
+        player.velocity.y = 0.0;
+    } else if ball.position.y < player.position.y && player.position.y > -0.47 {
         player.velocity.y = -0.5;
-    } else if ball.position.y > player.position.y {
+    } else if ball.position.y > player.position.y && player.position.y < 0.47 {
         player.velocity.y = 0.5;
     }
 }
@@ -227,19 +293,21 @@ fn collision(ball: &mut Ball, player1: &Paddle, player2: &Paddle, time_delta: f3
     if circle_intersect_line(
         updated_pos,
         ball.radius,
-        player2.position + Vector2::new(-0.025, 0.1),
-        player2.position + Vector2::new(-0.025, -0.1),
+        player1.position + Vector2::new(0.025, 0.1),
+        player1.position + Vector2::new(0.025, -0.1),
     ) {
-        ball.velocity.x = -ball.velocity.x;
+        ball.velocity.x = -ball.velocity.x * 1.01;
+        ball.velocity.y += player1.velocity.y * 0.2;
     }
 
     if circle_intersect_line(
         updated_pos,
         ball.radius,
-        player1.position + Vector2::new(0.025, 0.1),
-        player1.position + Vector2::new(0.025, -0.1),
+        player2.position + Vector2::new(-0.025, 0.1),
+        player2.position + Vector2::new(-0.025, -0.1),
     ) {
-        ball.velocity.x = -ball.velocity.x;
+        ball.velocity.x = -ball.velocity.x * 1.01;
+        ball.velocity.y += player2.velocity.y * 0.2;
     }
 
     if updated_pos.x > 1.0 || updated_pos.x < -1.0 {
@@ -252,8 +320,7 @@ fn circle_intersect_line(p: Vector2<f32>, radius: f32, a: Vector2<f32>, b: Vecto
     let pa = p - a;
     let parallel = line.normalize().dot(&pa) * line.normalize();
     let perp = pa - parallel;
-    console_log!("{}", perp.norm());
-    perp.norm() * dir <= radius && p.y - radius <= a.y && p.y + radius >= b.y
+    perp.norm() <= radius && p.y - radius <= a.y && p.y + radius >= b.y
 }
 fn window() -> web_sys::Window {
     web_sys::window().expect("no global `window` exists")

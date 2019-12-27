@@ -39,6 +39,7 @@ features = [
   'Performance',
   'EventTarget',
   'VisibilityState',
+  'KeyboardEvent',
 ]
 
 [dev-dependencies]
